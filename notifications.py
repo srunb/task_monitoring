@@ -73,7 +73,7 @@ def send_email_notification(to_email: str, subject: str, task_data: Dict[str, An
                 </tr>
             </table>
             {f'<p><strong>Description:</strong> {task_data.get("description", "")}</p>' if task_data.get('description') else ''}
-            <p style="color: #666; font-size: 12px;">This is an automated notification from T.Cloud Operation Task Monitoring.</p>
+            <p style="color: #666; font-size: 12px;">This is an automated notification from Operation Task Monitoring.</p>
         </body>
         </html>
         """
