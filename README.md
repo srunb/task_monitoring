@@ -1,4 +1,4 @@
-# T.Cloud Operation Task Monitoring
+#Task Monitoring
 
 A lightweight Flask task-management application for tracking operational work through a Kanban dashboard.
 
