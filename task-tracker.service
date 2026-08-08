@@ -1,0 +1,17 @@
+[Unit]
+Description=Task Tracker Application
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/code/task-tracker
+Environment="PATH=/root/code/task-tracker/venv/bin"
+Environment="FLASK_APP=app.py"
+Environment="FLASK_ENV=production"
+ExecStart=/root/code/task-tracker/venv/bin/python app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

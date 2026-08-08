@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - T.Cloud Operation Task Monitoring{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div class="dashboard-header">
+        <h1>Dashboard</h1>
+        <div class="dashboard-meta">
+            <span id="currentTime" class="meta-time"></span>
+            <span id="refreshStatus" class="meta-refresh"></span>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="summary-cards">
+        <div class="summary-card card-total">
+            <div class="card-icon">📋</div>
+            <div class="card-content">
+                <div class="card-label">Total Tasks</div>
+                <div class="card-value" id="totalTasks">-</div>
+            </div>
+        </div>
+        <div class="summary-card card-completed">
+            <div class="card-icon">✅</div>
+            <div class="card-content">
+                <div class="card-label">Completed</div>
+                <div class="card-value" id="completedTasks">-</div>
+            </div>
+        </div>
+        <div class="summary-card card-pending">
+            <div class="card-icon">⏳</div>
+            <div class="card-content">
+                <div class="card-label">Pending</div>
+                <div class="card-value" id="pendingTasks">-</div>
+            </div>
+        </div>
+        <div class="summary-card card-overdue">
+            <div class="card-icon">⚠️</div>
+            <div class="card-content">
+                <div class="card-label">Overdue</div>
+                <div class="card-value" id="overdueTasks">-</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Filters -->
+    <div class="filter-bar">
+        <button class="filter-btn active" data-filter="all">All Tasks</button>
+        <button class="filter-btn" data-filter="my">My Tasks</button>
+        <button class="filter-btn" data-filter="overdue">Overdue</button>
+        {% if current_user.is_editor() %}
+        <button class="btn btn-primary" id="addTaskBtn">+ Add Task</button>
+        {% endif %}
+    </div>
+
+    <!-- Kanban Board -->
+    <div class="kanban-board" id="kanbanBoard">
+        <div class="kanban-column kanban-column-adhoc" data-category="adhoc">
+            <div class="kanban-column-header">
+                <h3>📌 Ad-hoc</h3>
+                <span class="kanban-count" id="count-adhoc">0</span>
+            </div>
+            <div class="kanban-cards" id="column-adhoc"></div>
+        </div>
+
+        <div class="kanban-column kanban-column-daily" data-category="daily">
+            <div class="kanban-column-header">
+                <h3>🔄 Daily</h3>
+                <span class="kanban-count" id="count-daily">0</span>
+            </div>
+            <div class="kanban-cards" id="column-daily"></div>
+        </div>
+
+        <div class="kanban-column kanban-column-weekly" data-category="weekly">
+            <div class="kanban-column-header">
+                <h3>📅 Weekly</h3>
+                <span class="kanban-count" id="count-weekly">0</span>
+            </div>
+            <div class="kanban-cards" id="column-weekly"></div>
+        </div>
+
+        <div class="kanban-column kanban-column-monthly" data-category="monthly">
+            <div class="kanban-column-header">
+                <h3>📆 Monthly</h3>
+                <span class="kanban-count" id="count-monthly">0</span>
+            </div>
+            <div class="kanban-cards" id="column-monthly"></div>
+        </div>
+
+        <div class="kanban-column kanban-column-long-term" data-category="long-term">
+            <div class="kanban-column-header">
+                <h3>🗓️ Quarterly / Yearly</h3>
+                <span class="kanban-count" id="count-long-term">0</span>
+            </div>
+            <div class="kanban-cards" id="column-long-term"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Task Modal -->
+{% if current_user.is_editor() %}
+<div id="addTaskModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Add New Task</h2>
+            <button class="modal-close" id="closeModal">&times;</button>
+        </div>
+        <form id="addTaskForm" class="modal-body">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="taskTitle">Title *</label>
+                    <input type="text" id="taskTitle" required>
+                </div>
+                <div class="form-group">
+                    <label for="taskCategory">Category *</label>
+                    <select id="taskCategory" required>
+                        <option value="adhoc">Ad-hoc</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="quarterly">Quarterly</option>
+                        <option value="yearly">Yearly</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="taskPriority">Priority</label>
+                    <select id="taskPriority">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="taskDue">Due Date</label>
+                    <input type="datetime-local" id="taskDue">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="taskAssignee">Assign To</label>
+                <select id="taskAssignee">
+                    <option value="">Unassigned</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="taskDescription">Description</label>
+                <textarea id="taskDescription" rows="3"></textarea>
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="taskRecurring">
+                <label for="taskRecurring">Recurring template</label>
+                <small class="text-muted">Daily creates at 00:01, weekly on Monday 00:01, monthly on day 1 at 00:01</small>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cancelBtn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Task</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Task Detail Modal -->
+<div id="taskDetailModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="taskDetailTitle">Task Details</h2>
+            <button class="modal-close" id="closeDetailModal">&times;</button>
+        </div>
+        <div class="modal-body" id="taskDetailContent">
+            <!-- Task details will be loaded here -->
+        </div>
+        <div class="modal-footer" id="taskDetailFooter">
+            <button type="button" class="btn btn-secondary" id="closeDetailBtn">Close</button>
+            <button type="button" class="btn btn-success" id="detailCompleteBtn">Complete</button>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

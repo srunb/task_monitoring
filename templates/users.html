@@ -1,0 +1,318 @@
+{% extends "base.html" %}
+
+{% block title %}Users - T.Cloud Operation Task Monitoring{% endblock %}
+
+{% block content %}
+<div class="users-container">
+    <div class="users-header">
+        <h1>User Management</h1>
+        <button class="btn btn-primary" id="addUserBtn">+ Add User</button>
+    </div>
+
+    <!-- Users Table -->
+    <div class="users-table-wrapper">
+        <table class="users-table">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="usersTableBody">
+                <tr>
+                    <td colspan="6" class="loading">Loading users...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Add/Edit User Modal -->
+<div id="userModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="userModalTitle">Add New User</h2>
+            <button class="modal-close" id="closeModal">&times;</button>
+        </div>
+        <form id="userForm" class="modal-body">
+            <input type="hidden" id="editUserId">
+            <div class="form-group">
+                <label for="userName">Username *</label>
+                <input type="text" id="userName" required>
+            </div>
+            <div class="form-group">
+                <label for="userEmail">Email *</label>
+                <input type="email" id="userEmail" required>
+            </div>
+            <div class="form-group">
+                <label for="userPassword">Password *</label>
+                <input type="password" id="userPassword" required>
+                <small class="text-muted">Required for new users, optional when editing</small>
+            </div>
+            <div class="form-group">
+                <label for="userRole">Role *</label>
+                <select id="userRole" required>
+                    <option value="user">User</option>
+                    <option value="editor">Editor</option>
+                    <option value="admin">Admin</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="userLineId">LINE ID (for notifications)</label>
+                <input type="text" id="userLineId" placeholder="Optional LINE user ID">
+            </div>
+            <div class="form-group checkbox-group" id="activeGroup" style="display: none;">
+                <input type="checkbox" id="userActive" checked>
+                <label for="userActive">Active</label>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cancelUserBtn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save User</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="deleteUserModal" class="modal">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2>Confirm Delete</h2>
+            <button class="modal-close" id="closeDeleteModal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Are you sure you want to delete this user?</p>
+            <p id="deleteUserName" class="text-muted"></p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="cancelDelete">Cancel</button>
+            <button type="button" class="btn btn-danger" id="confirmDelete">Delete</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const usersContainer = document.querySelector('.users-container');
+const usersTableBody = document.getElementById('usersTableBody');
+const addUserBtn = document.getElementById('addUserBtn');
+const userModal = document.getElementById('userModal');
+const userForm = document.getElementById('userForm');
+const userModalTitle = document.getElementById('userModalTitle');
+const editUserId = document.getElementById('editUserId');
+const userPassword = document.getElementById('userPassword');
+const activeGroup = document.getElementById('activeGroup');
+const closeModal = document.getElementById('closeModal');
+const cancelUserBtn = document.getElementById('cancelUserBtn');
+const deleteUserModal = document.getElementById('deleteUserModal');
+const closeDeleteModal = document.getElementById('closeDeleteModal');
+const cancelDelete = document.getElementById('cancelDelete');
+const confirmDelete = document.getElementById('confirmDelete');
+const deleteUserName = document.getElementById('deleteUserName');
+
+let userToDelete = null;
+
+// Load users on page load
+loadUsers();
+setInterval(loadUsers, 30000); // Refresh every 30 seconds
+
+async function loadUsers() {
+    try {
+        const response = await fetch('/api/users');
+        const data = await response.json();
+
+        if (data.users) {
+            renderUsers(data.users);
+        }
+    } catch (error) {
+        console.error('Failed to load users:', error);
+        showNotification('Failed to load users', 'error');
+    }
+}
+
+function renderUsers(users) {
+    usersTableBody.innerHTML = users.map(user => `
+        <tr>
+            <td>${escapeHtml(user.username)}</td>
+            <td>${escapeHtml(user.email)}</td>
+            <td><span class="badge badge-${user.role}">${user.role}</span></td>
+            <td><span class="status status-${user.is_active ? 'active' : 'inactive'}">${user.is_active ? 'Active' : 'Inactive'}</span></td>
+            <td>${formatDate(user.created_at)}</td>
+            <td class="actions">
+                <button class="btn btn-small btn-edit" onclick="editUser(${user.id})">Edit</button>
+                <button class="btn btn-small btn-delete" onclick="deleteUser(${user.id}, '${escapeHtml(user.username)}')">Delete</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+addUserBtn.addEventListener('click', () => {
+    userModalTitle.textContent = 'Add New User';
+    editUserId.value = '';
+    userForm.reset();
+    userPassword.required = true;
+    activeGroup.style.display = 'none';
+    userModal.classList.add('show');
+});
+
+window.editUser = function(userId) {
+    const row = usersTableBody.querySelector(`tr[onclick="editUser(${userId})"]`);
+    userModalTitle.textContent = 'Edit User';
+    editUserId.value = userId;
+    userPassword.required = false;
+    userPassword.placeholder = 'Leave blank to keep current';
+    activeGroup.style.display = 'flex';
+
+    // Load user data
+    fetch(`/api/users`)
+        .then(r => r.json())
+        .then(data => {
+            const user = data.users.find(u => u.id === userId);
+            if (user) {
+                document.getElementById('userName').value = user.username;
+                document.getElementById('userEmail').value = user.email;
+                document.getElementById('userRole').value = user.role;
+                document.getElementById('userLineId').value = user.line_id || '';
+                document.getElementById('userActive').checked = user.is_active;
+                userModal.classList.add('show');
+            }
+        });
+};
+
+userForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const userData = {
+        username: document.getElementById('userName').value,
+        email: document.getElementById('userEmail').value,
+        role: document.getElementById('userRole').value,
+        line_id: document.getElementById('userLineId').value
+    };
+
+    if (userPassword.value) {
+        userData.password = userPassword.value;
+    }
+
+    if (editUserId.value) {
+        userData.is_active = document.getElementById('userActive').checked;
+    }
+
+    try {
+        const url = editUserId.value ? `/api/users/${editUserId.value}` : '/api/users';
+        const method = editUserId.value ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(userData)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(editUserId.value ? 'User updated!' : 'User created!', 'success');
+            userModal.classList.remove('show');
+            loadUsers();
+        } else {
+            showNotification(result.error || 'Operation failed', 'error');
+        }
+    } catch (error) {
+        showNotification('Operation failed', 'error');
+    }
+});
+
+window.deleteUser = function(userId, username) {
+    if (userId === window.currentUser.id) {
+        showNotification('Cannot delete yourself', 'error');
+        return;
+    }
+    userToDelete = userId;
+    deleteUserName.textContent = username;
+    deleteUserModal.classList.add('show');
+};
+
+confirmDelete.addEventListener('click', async () => {
+    if (userToDelete) {
+        try {
+            const response = await fetch(`/api/users/${userToDelete}`, {
+                method: 'DELETE'
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                showNotification('User deleted!', 'success');
+                loadUsers();
+            } else {
+                showNotification(result.error || 'Delete failed', 'error');
+            }
+        } catch (error) {
+            showNotification('Delete failed', 'error');
+        }
+        deleteUserModal.classList.remove('show');
+        userToDelete = null;
+    }
+});
+
+// Modal close handlers
+closeModal.addEventListener('click', () => userModal.classList.remove('show'));
+cancelUserBtn.addEventListener('click', () => userModal.classList.remove('show'));
+closeDeleteModal.addEventListener('click', () => deleteUserModal.classList.remove('show'));
+cancelDelete.addEventListener('click', () => deleteUserModal.classList.remove('show'));
+
+// Close modal on outside click
+window.addEventListener('click', (e) => {
+    if (e.target === userModal) userModal.classList.remove('show');
+    if (e.target === deleteUserModal) deleteUserModal.classList.remove('show');
+});
+
+// Logout handler
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+    try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+        window.location.href = '/login';
+    } catch (error) {
+        window.location.href = '/login';
+    }
+});
+
+// Utility functions
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatDate(dateString) {
+    if (!dateString) return '-';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        timeZone: 'Asia/Bangkok'
+    });
+}
+
+function showNotification(message, type = 'info') {
+    const container = document.getElementById('notification-container') || createNotificationContainer();
+    const notification = document.createElement('div');
+    notification.className = `notification notification-${type}`;
+    notification.textContent = message;
+    container.appendChild(notification);
+
+    setTimeout(() => notification.remove(), 5000);
+}
+
+function createNotificationContainer() {
+    const container = document.createElement('div');
+    container.id = 'notification-container';
+    document.body.appendChild(container);
+    return container;
+}
+</script>
+{% endblock %}

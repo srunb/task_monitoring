@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}T.Cloud Operation Task Monitoring{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    {% if current_user.is_authenticated %}
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <a href="{{ url_for('dashboard') }}">T.Cloud Operation Task Monitoring</a>
+            </div>
+            <div class="nav-menu">
+                <a href="{{ url_for('dashboard') }}" class="nav-link">Dashboard</a>
+                <a href="{{ url_for('tasks_page') }}" class="nav-link">Tasks</a>
+                {% if current_user.is_admin() %}
+                <a href="{{ url_for('users_page') }}" class="nav-link">Users</a>
+                {% endif %}
+                <button id="darkModeToggle" class="dark-mode-toggle" title="Toggle dark mode">
+                    <span id="darkModeIcon">🌙</span>
+                </button>
+                <div class="nav-user">
+                    <span class="user-badge">{{ current_user.username }}</span>
+                    <button id="logoutBtn" class="btn btn-small">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+    {% endif %}
+
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <div id="notification-container"></div>
+
+    <script>
+        // Global user data
+        window.currentUser = {{ current_user.to_dict() | tojson if current_user.is_authenticated else 'null' }};
+    </script>
+    <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
