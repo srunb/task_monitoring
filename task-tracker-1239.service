@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=seiko
+User=ubuntu
 WorkingDirectory=/tmp/repos/task_monitoring
 Environment="PATH=/tmp/repos/task_monitoring/venv/bin"
 Environment="FLASK_ENV=production"
