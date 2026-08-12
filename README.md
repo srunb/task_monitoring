@@ -8,11 +8,8 @@ A lightweight Flask task-management application for tracking operational work th
 - Task creation, assignment, filtering, editing, completion, and deletion
 - Kanban dashboard with Ad-hoc, Daily, Weekly, Monthly, and Quarterly/Yearly columns
 - Unassigned tasks visible to all users
-- Daily, weekly, and monthly recurring task templates
-- Automatic recurring task generation:
-  - Daily at `00:01`
-  - Every Monday at `00:01`
-  - On the first day of each month at `00:01`
+- Daily, weekly, and monthly task completion prompts
+- Optional next-instance creation after the user confirms completion
 - Email and LINE notification hooks for overdue and upcoming tasks
 - Bangkok timezone support using `Asia/Bangkok`
 - Dark mode and responsive browser interface
@@ -93,7 +90,7 @@ auth.py                Authentication and role checks
 config.py              Environment-based configuration
 models.py              SQLAlchemy models and serialization
 notifications.py       Email and LINE notifications
-scheduler.py           Background jobs and recurring task generation
+scheduler.py           Background notification jobs
 templates/             Jinja2 HTML templates
 static/                CSS and browser JavaScript
 ```

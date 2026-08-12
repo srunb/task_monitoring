@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Tasks - Operation Task Monitoring{% endblock %}
+{% block title %}Tasks - {{ app_title }}{% endblock %}
 
 {% block content %}
 <div class="tasks-container">
@@ -118,11 +118,6 @@
                 <label for="taskDescription">Description</label>
                 <textarea id="taskDescription" rows="3"></textarea>
             </div>
-            <div class="form-group checkbox-group">
-                <input type="checkbox" id="taskRecurring">
-                <label for="taskRecurring">Recurring template</label>
-                <small class="text-muted">Daily creates at 00:01, weekly on Monday 00:01, monthly on day 1 at 00:01</small>
-            </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" id="cancelBtn">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save Task</button>
@@ -147,6 +142,25 @@
         <div class="modal-footer">
             <button type="button" class="btn btn-secondary" id="cancelDelete">Cancel</button>
             <button type="button" class="btn btn-danger" id="confirmDelete">Delete</button>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Complete Task Confirmation Modal -->
+{% if current_user.is_editor() %}
+<div id="completeModal" class="modal">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2>Create Next Task?</h2>
+            <button class="modal-close" id="closeCompleteModal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Do you want to create the next scheduled task?</p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="cancelComplete">No</button>
+            <button type="button" class="btn btn-primary" id="confirmComplete">Yes</button>
         </div>
     </div>
 </div>

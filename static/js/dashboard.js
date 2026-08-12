@@ -4,13 +4,13 @@
 let currentFilter = 'all';
 let usersList = [];
 let allTasks = [];
+let pendingDashboardCompleteTaskId = null;
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboardData();
     loadUsers();
     setupEventListeners();
-    syncRecurringOption();
     startAutoRefresh();
 });
 
@@ -205,8 +205,6 @@ function setupEventListeners() {
         addBtn.addEventListener('click', openAddTaskModal);
     }
 
-    document.getElementById('taskCategory')?.addEventListener('change', syncRecurringOption);
-
     // Modal close buttons
     const modal = document.getElementById('addTaskModal');
     if (modal) {
@@ -223,12 +221,29 @@ function setupEventListeners() {
     // Task detail modal
     const detailModal = document.getElementById('taskDetailModal');
     if (detailModal) {
-        document.getElementById('closeDetailModal').addEventListener('click', closeTaskDetail);
-        document.getElementById('closeDetailBtn').addEventListener('click', closeTaskDetail);
-        document.getElementById('detailCompleteBtn').addEventListener('click', completeFromDetail);
+        const closeDetailModal = document.getElementById('closeDetailModal');
+        const closeDetailBtn = document.getElementById('closeDetailBtn');
+        const detailCompleteBtn = document.getElementById('detailCompleteBtn');
+
+        if (closeDetailModal) closeDetailModal.addEventListener('click', closeTaskDetail);
+        if (closeDetailBtn) closeDetailBtn.addEventListener('click', closeTaskDetail);
+        if (detailCompleteBtn) detailCompleteBtn.addEventListener('click', completeFromDetail);
 
         detailModal.addEventListener('click', (e) => {
             if (e.target === detailModal) closeTaskDetail();
+        });
+    }
+
+    const completeModal = document.getElementById('dashboardCompleteModal');
+    if (completeModal) {
+        const closeButton = document.getElementById('closeDashboardCompleteModal');
+        const cancelButton = document.getElementById('cancelDashboardComplete');
+        const confirmButton = document.getElementById('confirmDashboardComplete');
+        if (closeButton) closeButton.addEventListener('click', closeDashboardCompleteModal);
+        if (cancelButton) cancelButton.addEventListener('click', () => finishDashboardCompleteTask(false));
+        if (confirmButton) confirmButton.addEventListener('click', () => finishDashboardCompleteTask(true));
+        completeModal.addEventListener('click', (e) => {
+            if (e.target === completeModal) closeDashboardCompleteModal();
         });
     }
 
@@ -248,7 +263,6 @@ async function openAddTaskModal() {
 
     // Populate users dropdown
     populateAssigneeDropdown();
-    syncRecurringOption();
 
     // Set default due date to tomorrow 9 AM
     const tomorrow = new Date();
@@ -277,7 +291,6 @@ async function handleAddTask(e) {
         category: document.getElementById('taskCategory').value,
         priority: document.getElementById('taskPriority').value,
         assigned_to: document.getElementById('taskAssignee').value || null,
-        is_recurring: document.getElementById('taskRecurring').checked,
         due_date: dueDate ? new Date(dueDate).toISOString() : null
     };
 
@@ -306,9 +319,22 @@ async function handleAddTask(e) {
 window.openTaskDetail = async function(taskId) {
     try {
         const response = await fetch(`/api/tasks/${taskId}`);
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
         const task = await response.json();
+        if (!task.id) throw new Error('Task not found');
 
-        document.getElementById('taskDetailTitle').textContent = task.title;
+        const titleEl = document.getElementById('taskDetailTitle');
+        const contentEl = document.getElementById('taskDetailContent');
+        const modalEl = document.getElementById('taskDetailModal');
+        const completeBtn = document.getElementById('detailCompleteBtn');
+        if (!titleEl || !contentEl || !modalEl || !completeBtn) {
+            throw new Error('Task detail modal is unavailable');
+        }
+
+        titleEl.textContent = task.title;
 
         const priorityEmoji = {
             low: '🟢 Low',
@@ -317,7 +343,7 @@ window.openTaskDetail = async function(taskId) {
             critical: '🔴 Critical'
         };
 
-        document.getElementById('taskDetailContent').innerHTML = `
+        contentEl.innerHTML = `
             <div class="task-detail-row">
                 <strong>Status:</strong>
                 <span class="status status-${task.status}">${task.status.replace('_', ' ')}</span>
@@ -341,35 +367,105 @@ window.openTaskDetail = async function(taskId) {
         `;
 
         // Update complete button
-        const completeBtn = document.getElementById('detailCompleteBtn');
-        if (task.status === 'completed') {
+        const canComplete = window.currentUser &&
+            (window.currentUser.role === 'editor' ||
+             window.currentUser.role === 'admin' ||
+             task.assigned_to === window.currentUser.id);
+        const recurringCategories = ['daily', 'weekly', 'monthly'];
+        const isRecurringTask = recurringCategories.includes(task.category);
+        if (task.status === 'completed' || !canComplete) {
             completeBtn.style.display = 'none';
+            delete completeBtn.dataset.taskId;
         } else {
             completeBtn.style.display = 'inline-block';
             completeBtn.dataset.taskId = taskId;
+            completeBtn.dataset.recurring = String(isRecurringTask);
         }
 
-        document.getElementById('taskDetailModal').classList.add('show');
+        modalEl.classList.add('show');
     } catch (error) {
-        showNotification('Failed to load task details', 'error');
+        console.error('Failed to load task details:', error);
+        showNotification('Failed to load task details: ' + error.message, 'error');
     }
 };
 
 function closeTaskDetail() {
-    document.getElementById('taskDetailModal').classList.remove('show');
+    const modal = document.getElementById('taskDetailModal');
+    const completeBtn = document.getElementById('detailCompleteBtn');
+    if (modal) modal.classList.remove('show');
+    if (completeBtn) delete completeBtn.dataset.taskId;
 }
 
 // Complete task from detail modal
 async function completeFromDetail() {
     const btn = document.getElementById('detailCompleteBtn');
-    const taskId = btn.dataset.taskId;
+    const taskId = btn?.dataset.taskId;
 
+    if (!taskId) {
+        showNotification('No task selected', 'error');
+        return;
+    }
+
+    requestDashboardCompletion(taskId);
+}
+
+async function requestDashboardCompletion(taskId) {
+    try {
+        const response = await fetch(`/api/tasks/${taskId}`);
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+
+        const task = await response.json();
+        const recurringCategories = ['daily', 'weekly', 'monthly'];
+        if (!recurringCategories.includes(task.category)) {
+            executeDashboardCompleteTask(taskId, false);
+            return;
+        }
+
+        pendingDashboardCompleteTaskId = taskId;
+        const modal = document.getElementById('dashboardCompleteModal');
+        if (!modal) {
+            const createNext = window.confirm('Create the next scheduled task?');
+            executeDashboardCompleteTask(taskId, createNext);
+            return;
+        }
+        modal.classList.add('show');
+    } catch (error) {
+        console.error('Failed to prepare task completion:', error);
+        showNotification('Failed to complete task: ' + error.message, 'error');
+    }
+}
+
+function closeDashboardCompleteModal() {
+    const modal = document.getElementById('dashboardCompleteModal');
+    if (modal) modal.classList.remove('show');
+    pendingDashboardCompleteTaskId = null;
+}
+
+function finishDashboardCompleteTask(createNext) {
+    const taskId = pendingDashboardCompleteTaskId;
     if (!taskId) return;
 
+    const modal = document.getElementById('dashboardCompleteModal');
+    if (modal) modal.classList.remove('show');
+    pendingDashboardCompleteTaskId = null;
+    executeDashboardCompleteTask(taskId, createNext);
+}
+
+async function executeDashboardCompleteTask(taskId, createNext) {
     try {
         const response = await fetch(`/api/tasks/${taskId}/complete`, {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ create_next: createNext })
         });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
 
         const result = await response.json();
 
@@ -381,28 +477,14 @@ async function completeFromDetail() {
             showNotification(result.error || 'Failed to complete task', 'error');
         }
     } catch (error) {
-        showNotification('Failed to complete task', 'error');
+        console.error('Complete task error:', error);
+        showNotification('Failed to complete task: ' + error.message, 'error');
     }
 }
 
 // Complete task (for backward compatibility)
 window.completeTask = async function(taskId) {
-    try {
-        const response = await fetch(`/api/tasks/${taskId}/complete`, {
-            method: 'POST'
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            showNotification('Task completed!', 'success');
-            loadDashboardData();
-        } else {
-            showNotification(result.error || 'Failed to complete task', 'error');
-        }
-    } catch (error) {
-        showNotification('Failed to complete task', 'error');
-    }
+    requestDashboardCompletion(taskId);
 };
 
 // Logout handler
@@ -504,16 +586,4 @@ function calendarDayDifference(date, reference) {
     };
 
     return Math.round((parts(date) - parts(reference)) / (1000 * 60 * 60 * 24));
-}
-
-function syncRecurringOption() {
-    const category = document.getElementById('taskCategory');
-    const recurring = document.getElementById('taskRecurring');
-    if (!category || !recurring) return;
-
-    const supported = ['daily', 'weekly', 'monthly'].includes(category.value);
-    recurring.disabled = !supported;
-    if (!supported) {
-        recurring.checked = false;
-    }
 }

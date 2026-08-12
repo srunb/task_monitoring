@@ -6,18 +6,23 @@ let taskToDelete = null;
 
 // Initialize tasks page
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('Tasks page initializing...');
+    setupEventListeners();
     loadTasks();
     loadUsers();
-    setupEventListeners();
-    syncRecurringOption();
     startAutoRefresh();
+    console.log('Tasks page initialized');
 });
 
 // Load tasks with current filters
 async function loadTasks() {
-    const category = document.getElementById('categoryFilter')?.value || '';
-    const status = document.getElementById('statusFilter')?.value || '';
-    const search = document.getElementById('searchInput')?.value || '';
+    const categoryEl = document.getElementById('categoryFilter');
+    const statusEl = document.getElementById('statusFilter');
+    const searchEl = document.getElementById('searchInput');
+
+    const category = categoryEl?.value || '';
+    const status = statusEl?.value || '';
+    const search = searchEl?.value || '';
 
     let url = '/api/tasks?';
     if (category) url += `category=${category}&`;
@@ -60,13 +65,19 @@ async function loadTasks() {
 // Render tasks table
 function renderTasksTable(tasks) {
     const tbody = document.getElementById('tasksTableBody');
+    if (!tbody) {
+        console.error('tasksTableBody not found');
+        return;
+    }
 
     if (tasks.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="no-tasks">No tasks found</td></tr>';
         return;
     }
 
-    tbody.innerHTML = tasks.map(task => `
+    tbody.innerHTML = tasks.map(task => {
+        const safeTitle = (task.title || '').replace(/'/g, "\\'").replace(/"/g, '\\"');
+        return `
         <tr>
             <td>
                 <div class="task-cell-title">${task.title ? escapeHtml(task.title) : 'No title'}</div>
@@ -76,19 +87,19 @@ function renderTasksTable(tasks) {
             <td><span class="badge badge-${task.priority}">${task.priority || 'N/A'}</span></td>
             <td><span class="status status-${task.status}">${(task.status || 'pending').replace('_', ' ')}</span></td>
             <td>${task.assignee ? task.assignee.username : 'Unassigned'}</td>
-            <td>${formatDateTime(task.due_date)}</td>
-            <td>${formatDateTime(task.completed_at, false)}</td>
+            <td>${formatDateTime(task.due_date, true, task.status)}</td>
+            <td>${formatCompletedDate(task.completed_at, task.due_date)}</td>
             <td class="actions">
                 ${task.status !== 'completed' ? `
                     <button class="btn btn-small btn-complete" onclick="completeTask(${task.id})" title="Complete">✓</button>
                 ` : '<button class="btn btn-small" disabled title="Completed">✓</button>'}
                 ${window.currentUser && (window.currentUser.role === 'editor' || window.currentUser.role === 'admin') ? `
                     <button class="btn btn-small btn-edit" onclick="editTask(${task.id})" title="Edit">✎</button>
-                    <button class="btn btn-small btn-delete" onclick="confirmDeleteTask(${task.id}, '${(task.title || '').replace(/'/g, "\\'").replace(/"/g, '\\"')}')" title="Delete">🗑</button>
+                    <button class="btn btn-small btn-delete" onclick="confirmDeleteTask(${task.id}, '${safeTitle}')" title="Delete">🗑</button>
                 ` : ''}
             </td>
         </tr>
-    `).join('');
+    `}).join('');
 }
 
 // Load users
@@ -140,15 +151,23 @@ function populateAssigneeDropdown() {
 // Setup event listeners
 function setupEventListeners() {
     // Filters
-    document.getElementById('categoryFilter').addEventListener('change', loadTasks);
-    document.getElementById('statusFilter').addEventListener('change', loadTasks);
-    document.getElementById('searchInput').addEventListener('input', debounce(loadTasks, 300));
-    document.getElementById('taskCategory')?.addEventListener('change', syncRecurringOption);
+    const categoryFilter = document.getElementById('categoryFilter');
+    const statusFilter = document.getElementById('statusFilter');
+    const searchInput = document.getElementById('searchInput');
+
+    if (categoryFilter) categoryFilter.addEventListener('change', loadTasks);
+    if (statusFilter) statusFilter.addEventListener('change', loadTasks);
+    if (searchInput) searchInput.addEventListener('input', debounce(loadTasks, 300));
 
     // Add task button
     const addBtn = document.getElementById('addTaskBtn');
     if (addBtn) {
-        addBtn.addEventListener('click', () => openTaskModal());
+        addBtn.addEventListener('click', () => {
+            console.log('Add task button clicked');
+            openTaskModal();
+        });
+    } else {
+        console.error('Add task button not found');
     }
 
     // Task form
@@ -172,12 +191,25 @@ function setupEventListeners() {
         if (confirmDelete) confirmDelete.addEventListener('click', executeDeleteTask);
     }
 
+    // Complete modal
+    const completeModal = document.getElementById('completeModal');
+    if (completeModal) {
+        const closeCompleteButton = document.getElementById('closeCompleteModal');
+        if (closeCompleteButton) closeCompleteButton.addEventListener('click', closeCompleteModal);
+        const cancelComplete = document.getElementById('cancelComplete');
+        if (cancelComplete) cancelComplete.addEventListener('click', () => finishCompleteTask(false));
+        const confirmComplete = document.getElementById('confirmComplete');
+        if (confirmComplete) confirmComplete.addEventListener('click', () => finishCompleteTask(true));
+    }
+
     // Close modals on outside click
     window.addEventListener('click', (e) => {
         const taskModal = document.getElementById('taskModal');
         const deleteModal = document.getElementById('deleteModal');
+        const completeModal = document.getElementById('completeModal');
         if (e.target === taskModal) closeTaskModal();
         if (e.target === deleteModal) closeDeleteModal();
+        if (e.target === completeModal) closeCompleteModal();
     });
 
     // Logout
@@ -193,44 +225,62 @@ async function openTaskModal(task = null) {
     const title = document.getElementById('modalTitle');
     const form = document.getElementById('taskForm');
 
+    if (!modal || !title || !form) {
+        console.error('Modal elements not found');
+        showNotification('Failed to open task modal', 'error');
+        return;
+    }
+
     await loadUsers();
 
     if (task) {
         populateAssigneeDropdown();
         title.textContent = 'Edit Task';
-        document.getElementById('editTaskId').value = task.id;
-        document.getElementById('taskTitle').value = task.title;
-        document.getElementById('taskDescription').value = task.description || '';
-        document.getElementById('taskCategory').value = task.category;
-        document.getElementById('taskPriority').value = task.priority;
-        document.getElementById('taskStatus').value = task.status;
-        document.getElementById('taskAssignee').value = task.assigned_to || '';
-        document.getElementById('taskRecurring').checked = Boolean(task.is_recurring);
-        syncRecurringOption();
+        const editIdEl = document.getElementById('editTaskId');
+        const taskTitleEl = document.getElementById('taskTitle');
+        const taskDescEl = document.getElementById('taskDescription');
+        const taskCatEl = document.getElementById('taskCategory');
+        const taskPriEl = document.getElementById('taskPriority');
+        const taskStatEl = document.getElementById('taskStatus');
+        const taskAssigneeEl = document.getElementById('taskAssignee');
+
+        if (editIdEl) editIdEl.value = task.id;
+        if (taskTitleEl) taskTitleEl.value = task.title || '';
+        if (taskDescEl) taskDescEl.value = task.description || '';
+        if (taskCatEl) taskCatEl.value = task.category || 'adhoc';
+        if (taskPriEl) taskPriEl.value = task.priority || 'medium';
+        if (taskStatEl) taskStatEl.value = task.status || 'pending';
+        if (taskAssigneeEl) taskAssigneeEl.value = task.assigned_to || '';
         // Format datetime-local requires YYYY-MM-DDTHH:MM
-        if (task.due_date) {
-            const d = new Date(task.due_date);
-            // Convert to local timezone
-            const offset = d.getTimezoneOffset() * 60000;
-            const localDate = new Date(d.getTime() - offset);
-            document.getElementById('taskDue').value = localDate.toISOString().slice(0, 16);
-        } else {
-            document.getElementById('taskDue').value = '';
+        const taskDueEl = document.getElementById('taskDue');
+        if (taskDueEl) {
+            if (task.due_date) {
+                const d = new Date(task.due_date);
+                // Convert to local timezone
+                const offset = d.getTimezoneOffset() * 60000;
+                const localDate = new Date(d.getTime() - offset);
+                taskDueEl.value = localDate.toISOString().slice(0, 16);
+            } else {
+                taskDueEl.value = '';
+            }
         }
     } else {
         title.textContent = 'Add New Task';
         form.reset();
         populateAssigneeDropdown();
-        document.getElementById('editTaskId').value = '';
-        document.getElementById('taskRecurring').checked = false;
-        syncRecurringOption();
+        const editIdEl = document.getElementById('editTaskId');
+        if (editIdEl) editIdEl.value = '';
         // Set default due date to tomorrow 9 AM
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         tomorrow.setHours(9, 0, 0, 0);
         const offset = tomorrow.getTimezoneOffset() * 60000;
         const localDate = new Date(tomorrow.getTime() - offset);
-        document.getElementById('taskDue').value = localDate.toISOString().slice(0, 16);
+        const taskDueEl = document.getElementById('taskDue');
+        if (taskDueEl) taskDueEl.value = localDate.toISOString().slice(0, 16);
+        // Set default category
+        const taskCatEl = document.getElementById('taskCategory');
+        if (taskCatEl) taskCatEl.value = 'adhoc';
     }
 
     modal.classList.add('show');
@@ -245,16 +295,36 @@ function closeTaskModal() {
 async function handleTaskSubmit(e) {
     e.preventDefault();
 
-    const editId = document.getElementById('editTaskId').value;
-    const dueDate = document.getElementById('taskDue').value;
+    const editIdEl = document.getElementById('editTaskId');
+    const dueDateEl = document.getElementById('taskDue');
+    const titleEl = document.getElementById('taskTitle');
+    const descEl = document.getElementById('taskDescription');
+    const catEl = document.getElementById('taskCategory');
+    const priEl = document.getElementById('taskPriority');
+    const statEl = document.getElementById('taskStatus');
+    const assigneeEl = document.getElementById('taskAssignee');
+
+    const editId = editIdEl?.value || '';
+    const dueDate = dueDateEl?.value || '';
+    const title = titleEl?.value?.trim() || '';
+
+    if (!title) {
+        showNotification('Title is required', 'error');
+        return;
+    }
+
+    if (!catEl || !catEl.value) {
+        showNotification('Category is required', 'error');
+        return;
+    }
+
     const formData = {
-        title: document.getElementById('taskTitle').value,
-        description: document.getElementById('taskDescription').value,
-        category: document.getElementById('taskCategory').value,
-        priority: document.getElementById('taskPriority').value,
-        status: document.getElementById('taskStatus').value,
-        assigned_to: document.getElementById('taskAssignee').value || null,
-        is_recurring: document.getElementById('taskRecurring').checked,
+        title: title,
+        description: descEl?.value || '',
+        category: catEl.value,
+        priority: priEl?.value || 'medium',
+        status: statEl?.value || 'pending',
+        assigned_to: assigneeEl?.value || null,
         due_date: dueDate ? new Date(dueDate).toISOString() : null
     };
 
@@ -262,13 +332,24 @@ async function handleTaskSubmit(e) {
         const url = editId ? `/api/tasks/${editId}` : '/api/tasks';
         const method = editId ? 'PUT' : 'POST';
 
+        console.log('Submitting task:', { url, method, formData });
+
         const response = await fetch(url, {
             method,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(formData)
         });
 
+        console.log('Response status:', response.status);
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            console.error('Error response:', errorData);
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+
         const result = await response.json();
+        console.log('Result:', result);
 
         if (result.success) {
             showNotification(editId ? 'Task updated!' : 'Task created!', 'success');
@@ -278,21 +359,32 @@ async function handleTaskSubmit(e) {
             showNotification(result.error || 'Operation failed', 'error');
         }
     } catch (error) {
-        showNotification('Operation failed', 'error');
+        console.error('Task submit error:', error);
+        showNotification('Operation failed: ' + error.message, 'error');
     }
 }
 
 // Edit task
 window.editTask = async function(taskId) {
     try {
+        console.log('Loading task', taskId, 'for edit');
         const response = await fetch(`/api/tasks/${taskId}`);
+        if (!response.ok) {
+            if (response.status === 403) {
+                throw new Error('Access denied - you do not have permission to edit this task');
+            }
+            throw new Error(`HTTP ${response.status}`);
+        }
         const data = await response.json();
 
-        if (data) {
+        if (data && data.id) {
             await openTaskModal(data);
+        } else {
+            showNotification('Task not found', 'error');
         }
     } catch (error) {
-        showNotification('Failed to load task', 'error');
+        console.error('Failed to load task:', error);
+        showNotification('Failed to load task: ' + error.message, 'error');
     }
 };
 
@@ -334,11 +426,77 @@ async function executeDeleteTask() {
 }
 
 // Complete task
+let pendingCompleteTaskId = null;
+
 window.completeTask = async function(taskId) {
+    pendingCompleteTaskId = taskId;
+
+    try {
+        const response = await fetch(`/api/tasks/${taskId}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const task = await response.json();
+
+        const recurringCategories = ['daily', 'weekly', 'monthly'];
+        const isRecurringTask = recurringCategories.includes(task.category);
+
+        if (isRecurringTask) {
+            const modal = document.getElementById('completeModal');
+
+            if (!modal) {
+                console.error('Complete modal elements not found');
+                executeCompleteTask(taskId, false);
+                return;
+            }
+
+            modal.classList.add('show');
+        } else {
+            executeCompleteTask(taskId, false);
+        }
+    } catch (error) {
+        pendingCompleteTaskId = null;
+        console.error('Failed to load task for completion:', error);
+        showNotification('Failed to load task: ' + error.message, 'error');
+    }
+};
+
+// Complete modal
+function openCompleteModal() {
+    const modal = document.getElementById('completeModal');
+    if (modal) modal.classList.add('show');
+}
+
+function closeCompleteModal() {
+    const modal = document.getElementById('completeModal');
+    if (modal) modal.classList.remove('show');
+    pendingCompleteTaskId = null;
+}
+
+function finishCompleteTask(createNext) {
+    const taskId = pendingCompleteTaskId;
+    if (!taskId) return;
+
+    const modal = document.getElementById('completeModal');
+    if (modal) modal.classList.remove('show');
+    pendingCompleteTaskId = null;
+    executeCompleteTask(taskId, createNext);
+}
+
+async function executeCompleteTask(taskId, createNext) {
+    if (!taskId) return;
+
     try {
         const response = await fetch(`/api/tasks/${taskId}/complete`, {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ create_next: createNext })
         });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
 
         const result = await response.json();
 
@@ -349,9 +507,12 @@ window.completeTask = async function(taskId) {
             showNotification(result.error || 'Failed to complete task', 'error');
         }
     } catch (error) {
-        showNotification('Failed to complete task', 'error');
+        console.error('Execute complete task error:', error);
+        showNotification('Failed to complete task: ' + error.message, 'error');
+    } finally {
+        pendingCompleteTaskId = null;
     }
-};
+}
 
 // Logout
 async function handleLogout() {
@@ -380,7 +541,7 @@ function showNotification(message, type = 'info') {
 }
 
 // Format date with time
-function formatDateTime(dateString, relative = true) {
+function formatDateTime(dateString, relative = true, status = null) {
     if (!dateString) return '-';
     const date = new Date(dateString);
     const now = new Date();
@@ -390,7 +551,7 @@ function formatDateTime(dateString, relative = true) {
     const timeStr = formatTime(date);
     const dateStr = formatDate(date);
 
-    if (!relative) return `${dateStr} ${timeStr}`;
+    if (!relative || status === 'completed') return `${dateStr} ${timeStr}`;
 
     if (days < 0) {
         const hoursOverdue = Math.abs(Math.floor(diff / (1000 * 60 * 60)));
@@ -421,6 +582,26 @@ function formatTime(date) {
     });
 }
 
+function formatCompletedDate(completedAt, dueDate) {
+    if (!completedAt) return '-';
+    const completed = new Date(completedAt);
+    const dateStr = formatDate(completed);
+    const timeStr = formatTime(completed);
+
+    if (dueDate) {
+        const due = new Date(dueDate);
+        if (completed > due) {
+            const diffMs = completed - due;
+            const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
+            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+            const lateStr = diffDays > 0 ? `${diffDays}d late` : `${diffHrs}h late`;
+            return `<span class="text-danger">${dateStr} ${timeStr}</span> <span class="badge badge-overdue">⏰ ${lateStr}</span>`;
+        }
+    }
+
+    return `${dateStr} ${timeStr}`;
+}
+
 function calendarDayDifference(date, reference) {
     const parts = value => {
         const result = new Intl.DateTimeFormat('en-GB', {
@@ -437,18 +618,6 @@ function calendarDayDifference(date, reference) {
     };
 
     return Math.round((parts(date) - parts(reference)) / (1000 * 60 * 60 * 24));
-}
-
-function syncRecurringOption() {
-    const category = document.getElementById('taskCategory');
-    const recurring = document.getElementById('taskRecurring');
-    if (!category || !recurring) return;
-
-    const supported = ['daily', 'weekly', 'monthly'].includes(category.value);
-    recurring.disabled = !supported;
-    if (!supported) {
-        recurring.checked = false;
-    }
 }
 
 // Utility functions

@@ -10,9 +10,10 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from flask_cors import CORS
 from flask_login import login_user, logout_user, login_required, current_user
 from sqlalchemy import or_, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from config import config
-from models import db, User, Task, TaskLog, UserRole, TaskCategory, TaskStatus, TaskPriority
+from models import db, User, Task, TaskLog, AppSetting, UserRole, TaskCategory, TaskStatus, TaskPriority
 from auth import init_auth, admin_required, editor_required, can_edit_task, can_delete_task
 from notifications import send_email_notification, send_line_notification
 from scheduler import task_scheduler
@@ -23,27 +24,38 @@ def create_app(config_name='default'):
     app = Flask(__name__)
     app.config.from_object(config[config_name])
 
+    default_app_title = 'Operation Task Monitoring'
+
+    def application_logo_path():
+        return os.path.join(app.static_folder, 'uploads', 'logo.jpg')
+
+    def application_logo_url():
+        logo_path = application_logo_path()
+        if not os.path.exists(logo_path):
+            return None
+        return url_for(
+            'static',
+            filename='uploads/logo.jpg',
+            v=os.stat(logo_path).st_mtime_ns,
+        )
+
+    @app.context_processor
+    def inject_app_branding():
+        """Make the configured application branding available to every template."""
+        title_setting = AppSetting.query.filter_by(key='application_title').first()
+        app_title = title_setting.value.strip() if title_setting and title_setting.value else ''
+        return {
+            'app_title': app_title or default_app_title,
+            'logo_url': application_logo_url(),
+        }
+
     def visible_task_query(query):
         """Limit task visibility for regular users."""
         if current_user.is_editor():
             return query
         return query.filter(
-            Task.is_recurring.is_(False),
             or_(Task.assigned_to == current_user.id, Task.assigned_to.is_(None))
         )
-
-    def recurrence_rule_for_category(category):
-        """Store recurrence metadata for recurring task categories."""
-        if task_scheduler.is_recurring_category(category):
-            return f'FREQ={category.value.upper()}'
-        return None
-
-    def parse_recurring_flag(data, category):
-        """Recurring templates are only supported for daily, weekly, and monthly tasks."""
-        is_recurring = data.get('is_recurring', False)
-        if isinstance(is_recurring, str):
-            is_recurring = is_recurring.lower() == 'true'
-        return bool(is_recurring) and task_scheduler.is_recurring_category(category)
 
     # Initialize extensions
     CORS(app)
@@ -96,6 +108,12 @@ def create_app(config_name='default'):
     def users_page():
         """Serve user management page (admin only)."""
         return render_template('users.html')
+
+    @app.route('/settings')
+    @admin_required
+    def settings_page():
+        """Serve settings page (admin only)."""
+        return render_template('settings.html')
 
     # ============ API: Authentication ============
 
@@ -171,7 +189,7 @@ def create_app(config_name='default'):
         task = Task.query.get_or_404(task_id)
 
         # Check access
-        if not current_user.is_editor() and (task.is_recurring or task.assigned_to not in (None, current_user.id)):
+        if not current_user.is_editor() and task.assigned_to not in (None, current_user.id):
             return jsonify({'error': 'Access denied'}), 403
 
         return jsonify(task.to_dict(include_assignee=True, include_creator=True))
@@ -183,10 +201,13 @@ def create_app(config_name='default'):
         data = request.get_json()
 
         try:
+            title = data.get('title', '').strip()
+            if not title:
+                return jsonify({'success': False, 'error': 'Title is required'}), 400
+
             category = TaskCategory(data.get('category', 'adhoc'))
-            is_recurring = parse_recurring_flag(data, category)
             task = Task(
-                title=data.get('title'),
+                title=title,
                 description=data.get('description'),
                 category=category,
                 priority=TaskPriority(data.get('priority', 'medium')),
@@ -194,8 +215,8 @@ def create_app(config_name='default'):
                 assigned_to=data.get('assigned_to'),
                 created_by=current_user.id,
                 due_date=datetime.fromisoformat(data['due_date']) if data.get('due_date') else None,
-                is_recurring=is_recurring,
-                recurrence_rule=(data.get('recurrence_rule') or recurrence_rule_for_category(category)) if is_recurring else None
+                is_recurring=False,
+                recurrence_rule=None
             )
 
             db.session.add(task)
@@ -236,9 +257,13 @@ def create_app(config_name='default'):
             # Track changes for logging
             changes = []
 
-            if 'title' in data and data['title'] != task.title:
-                changes.append(f"title: '{task.title}' -> '{data['title']}'")
-                task.title = data['title']
+            if 'title' in data:
+                title = data['title'].strip() if data['title'] else ''
+                if not title:
+                    return jsonify({'success': False, 'error': 'Title is required'}), 400
+                if title != task.title:
+                    changes.append(f"title: '{task.title}' -> '{title}'")
+                    task.title = title
 
             if 'description' in data:
                 changes.append("description updated")
@@ -260,12 +285,6 @@ def create_app(config_name='default'):
 
             if 'category' in data:
                 task.category = TaskCategory(data['category'])
-                task.is_recurring = parse_recurring_flag(data, task.category) if 'is_recurring' in data else (task.is_recurring and task_scheduler.is_recurring_category(task.category))
-                task.recurrence_rule = recurrence_rule_for_category(task.category) if task.is_recurring else None
-
-            if 'is_recurring' in data and 'category' not in data:
-                task.is_recurring = parse_recurring_flag(data, task.category)
-                task.recurrence_rule = recurrence_rule_for_category(task.category) if task.is_recurring else None
 
             if 'due_date' in data:
                 task.due_date = datetime.fromisoformat(data['due_date']) if data['due_date'] else None
@@ -312,6 +331,12 @@ def create_app(config_name='default'):
             )
             db.session.add(log)
 
+            # Clean up child instances when deleting a recurring template
+            if task.is_recurring:
+                instances = Task.query.filter_by(recurrence_source_id=task.id).all()
+                for instance in instances:
+                    db.session.delete(instance)
+
             db.session.delete(task)
             db.session.commit()
 
@@ -324,8 +349,10 @@ def create_app(config_name='default'):
     @app.route('/api/tasks/<int:task_id>/complete', methods=['POST'])
     @login_required
     def api_complete_task(task_id):
-        """Mark task as complete."""
+        """Mark task complete and optionally create the next scheduled instance."""
         task = Task.query.get_or_404(task_id)
+        data = request.get_json() or {}
+        create_next = data.get('create_next', False)
 
         # Check permission
         if not can_edit_task(current_user, task):
@@ -342,6 +369,54 @@ def create_app(config_name='default'):
             )
 
             db.session.add(log)
+
+            # Next instances are created only after an explicit user confirmation.
+            if create_next and task_scheduler.is_recurring_category(task.category):
+                next_due = task_scheduler._calculate_next_due_date(
+                    task.due_date or datetime.utcnow(), task.category
+                )
+                if next_due:
+                    created_next_task = False
+                    next_task = Task.query.filter_by(
+                        recurrence_source_id=task.id,
+                        due_date=next_due,
+                    ).first()
+                    if not next_task:
+                        candidate = Task(
+                            title=task.title,
+                            description=task.description,
+                            category=task.category,
+                            priority=task.priority,
+                            assigned_to=task.assigned_to,
+                            created_by=current_user.id,
+                            due_date=next_due,
+                            status=TaskStatus.PENDING,
+                            is_recurring=False,
+                            recurrence_source_id=task.id,
+                        )
+                        try:
+                            with db.session.begin_nested():
+                                db.session.add(candidate)
+                                db.session.flush()
+                            next_task = candidate
+                            created_next_task = True
+                        except IntegrityError:
+                            next_task = Task.query.filter_by(
+                                recurrence_source_id=task.id,
+                                due_date=next_due,
+                            ).first()
+                            if not next_task:
+                                raise
+
+                    if created_next_task:
+                        next_log = TaskLog(
+                            task_id=next_task.id,
+                            user_id=current_user.id,
+                            action='manual_created',
+                            details=f"Manually created from completed task {task.id} by {current_user.username}"
+                        )
+                        db.session.add(next_log)
+
             db.session.commit()
 
             return jsonify({
@@ -519,6 +594,104 @@ def create_app(config_name='default'):
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 400
 
+    # ============ API: Settings (Admin Only) ============
+
+    SETTING_KEYS = {
+        'smtp_server', 'smtp_port', 'smtp_use_tls', 'smtp_username',
+        'smtp_password', 'email_from', 'webhook_url', 'webhook_token',
+        'application_title',
+    }
+
+    @app.route('/api/settings', methods=['GET'])
+    @admin_required
+    def api_get_settings():
+        """Get all notification settings."""
+        settings = {}
+        for s in AppSetting.query.all():
+            if s.key in SETTING_KEYS:
+                val = s.value
+                if s.key == 'smtp_password' or s.key == 'webhook_token':
+                    val = '********' if val else ''
+                settings[s.key] = val
+        return jsonify({'settings': settings})
+
+    @app.route('/api/settings', methods=['PUT'])
+    @admin_required
+    def api_update_settings():
+        """Update notification settings."""
+        data = request.get_json()
+
+        try:
+            if 'application_title' in data:
+                title = data['application_title']
+                if not isinstance(title, str):
+                    return jsonify({'success': False, 'error': 'Application title must be text'}), 400
+                if len(title.strip()) > 100:
+                    return jsonify({'success': False, 'error': 'Application title must be 100 characters or fewer'}), 400
+
+            for key in SETTING_KEYS:
+                if key not in data:
+                    continue
+                val = data[key]
+                if val == '********':
+                    continue
+                if key == 'smtp_port' and val:
+                    val = str(int(val))
+                if key == 'smtp_use_tls':
+                    val = 'true' if val else 'false'
+                if val is None:
+                    val = ''
+
+                existing = AppSetting.query.filter_by(key=key).first()
+                if existing:
+                    existing.value = val
+                else:
+                    db.session.add(AppSetting(key=key, value=val))
+
+            db.session.commit()
+            return jsonify({'success': True})
+
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 400
+
+    @app.route('/api/settings/logo', methods=['POST'])
+    @admin_required
+    def api_upload_logo():
+        """Upload a JPG logo used by the navigation and login branding."""
+        logo = request.files.get('logo')
+        if not logo or not logo.filename:
+            return jsonify({'success': False, 'error': 'Choose a JPG logo to upload'}), 400
+        if not logo.filename.lower().endswith(('.jpg', '.jpeg')):
+            return jsonify({'success': False, 'error': 'Logo must be a JPG image'}), 400
+
+        logo_data = logo.read(app.config['MAX_LOGO_UPLOAD_BYTES'] + 1)
+        if len(logo_data) > app.config['MAX_LOGO_UPLOAD_BYTES']:
+            return jsonify({'success': False, 'error': 'Logo must be 2 MB or smaller'}), 400
+        if not logo_data.startswith(b'\xff\xd8\xff'):
+            return jsonify({'success': False, 'error': 'Logo must be a valid JPG image'}), 400
+
+        logo_path = application_logo_path()
+        os.makedirs(os.path.dirname(logo_path), exist_ok=True)
+        with open(logo_path, 'wb') as logo_file:
+            logo_file.write(logo_data)
+
+        return jsonify({'success': True, 'logo_url': application_logo_url()})
+
+    @app.route('/api/settings/test-email', methods=['POST'])
+    @admin_required
+    def api_test_email():
+        """Send a test email using configured SMTP settings."""
+        result = send_email_notification(
+            current_user.email,
+            '✅ Task Monitoring - Test Email',
+            {'title': 'Test Email', 'category': 'system', 'priority': 'low',
+             'status': 'test', 'due_date': '', 'description': 'This is a test email from Task Monitoring.'}
+        )
+        if result:
+            return jsonify({'success': True, 'message': f'Test email sent to {current_user.email}'})
+        return jsonify({'success': False, 'error': 'Failed to send. Check SMTP settings.'}), 400
+
     # ============ API: Utility ============
 
     @app.route('/api/time')
@@ -628,7 +801,6 @@ def create_default_data():
         ]
 
         for task_data in sample_tasks:
-            is_recurring = task_data['category'] in [TaskCategory.DAILY, TaskCategory.WEEKLY, TaskCategory.MONTHLY]
             task = Task(
                 title=task_data['title'],
                 description=task_data['description'],
@@ -637,8 +809,8 @@ def create_default_data():
                 assigned_to=task_data['assigned_to'],
                 created_by=1,
                 due_date=datetime.utcnow() + timedelta(days=7),
-                is_recurring=is_recurring,
-                recurrence_rule=f"FREQ={task_data['category'].value.upper()}" if is_recurring else None
+                is_recurring=False,
+                recurrence_rule=None
             )
             db.session.add(task)
 
@@ -650,6 +822,7 @@ def ensure_schema_updates():
     """Add columns required by newer app versions for SQLite deployments."""
     inspector = inspect(db.engine)
     columns = {column['name'] for column in inspector.get_columns('tasks')}
+    constraints = inspector.get_unique_constraints('tasks') if hasattr(inspector, 'get_unique_constraints') else {}
     alter_statements = []
 
     if 'is_recurring' not in columns:
@@ -658,6 +831,19 @@ def ensure_schema_updates():
         alter_statements.append("ALTER TABLE tasks ADD COLUMN recurrence_source_id INTEGER")
     if 'last_generated_at' not in columns:
         alter_statements.append("ALTER TABLE tasks ADD COLUMN last_generated_at DATETIME")
+
+    # Add unique constraint for deduplication (SQLite workaround)
+    if 'uq_recurrence_instance' not in str(constraints):
+        existing_constraints = inspector.get_indexes('tasks') if hasattr(inspector, 'get_indexes') else []
+        has_constraint = any(
+            c.get('name') == 'uq_recurrence_instance'
+            for c in existing_constraints
+        )
+        if not has_constraint:
+            alter_statements.append(
+                "CREATE UNIQUE INDEX uq_recurrence_instance ON tasks (recurrence_source_id, due_date)"
+                " WHERE recurrence_source_id IS NOT NULL"
+            )
 
     for statement in alter_statements:
         db.session.execute(text(statement))

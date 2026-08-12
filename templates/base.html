@@ -3,8 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Operation Task Monitoring{% endblock %}</title>
+    <title>{% block title %}{{ app_title }}{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script>
+        (function() {
+            if (localStorage.getItem('darkMode') === 'true') {
+                document.documentElement.classList.add('dark-mode');
+            }
+        })();
+    </script>
     {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -12,13 +19,20 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
-                <a href="{{ url_for('dashboard') }}">Operation Task Monitoring</a>
+                <a href="{{ url_for('dashboard') }}" class="nav-brand-link">
+                    {% if logo_url %}<img class="brand-logo" src="{{ logo_url }}" alt="">{% endif %}
+                    <span class="nav-brand-title">{{ app_title }}</span>
+                </a>
             </div>
-            <div class="nav-menu">
+            <button id="navMenuToggle" class="nav-menu-toggle" type="button" aria-expanded="false" aria-controls="navMenu">
+                Menu
+            </button>
+            <div id="navMenu" class="nav-menu">
                 <a href="{{ url_for('dashboard') }}" class="nav-link">Dashboard</a>
                 <a href="{{ url_for('tasks_page') }}" class="nav-link">Tasks</a>
                 {% if current_user.is_admin() %}
                 <a href="{{ url_for('users_page') }}" class="nav-link">Users</a>
+                <a href="{{ url_for('settings_page') }}" class="nav-link">Settings</a>
                 {% endif %}
                 <button id="darkModeToggle" class="dark-mode-toggle" title="Toggle dark mode">
                     <span id="darkModeIcon">🌙</span>

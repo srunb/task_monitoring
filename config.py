@@ -45,6 +45,7 @@ class Config:
     # Application settings
     APP_HOST = os.environ.get('APP_HOST') or '0.0.0.0'
     APP_PORT = int(os.environ.get('APP_PORT', 1235))
+    MAX_LOGO_UPLOAD_BYTES = 2 * 1024 * 1024
     DEBUG = env_flag('DEBUG')
     BOOTSTRAP_DEFAULT_DATA = env_flag('BOOTSTRAP_DEFAULT_DATA')
 

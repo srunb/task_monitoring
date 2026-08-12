@@ -120,20 +120,23 @@ class Task(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Recurrence for recurring tasks
+    # Legacy recurrence columns retained for existing SQLite databases.
     is_recurring = db.Column(db.Boolean, default=False, nullable=False)
     recurrence_rule = db.Column(db.String(100), nullable=True)  # e.g., "FREQ=WEEKLY;BYDAY=MO"
     recurrence_source_id = db.Column(db.Integer, nullable=True)
     last_generated_at = db.Column(db.DateTime, nullable=True)
     last_notified = db.Column(db.DateTime, nullable=True)
 
+    # Unique constraint to prevent duplicate instances from the same template
+    __table_args__ = (
+        db.UniqueConstraint('recurrence_source_id', 'due_date', name='uq_recurrence_instance'),
+    )
+
     # Relationships
     logs = db.relationship('TaskLog', backref='task', lazy='dynamic', cascade='all, delete-orphan')
 
     def is_overdue(self):
         """Check if task is overdue."""
-        if self.is_recurring:
-            return False
         if self.status == TaskStatus.COMPLETED:
             return False
         if self.due_date and self.due_date < datetime.utcnow():
@@ -204,3 +207,11 @@ class TaskLog(db.Model):
             'timestamp': utc_iso(self.timestamp),
             'details': self.details
         }
+
+
+class AppSetting(db.Model):
+    """Key-value store for application settings (SMTP, webhook, etc.)."""
+    __tablename__ = 'app_settings'
+
+    key = db.Column(db.String(100), primary_key=True)
+    value = db.Column(db.Text, nullable=True)

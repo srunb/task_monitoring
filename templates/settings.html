@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - {{ app_title }}{% endblock %}
+
+{% block content %}
+<div class="tasks-container">
+    <div class="tasks-header">
+        <h1>⚙️ Settings</h1>
+    </div>
+
+    <div class="tasks-section">
+        <h2>Application</h2>
+        <div class="modal-body" style="display:flex;flex-direction:column;gap:var(--spacing-md);">
+            <div class="form-group">
+                <label for="application_title">Application Title</label>
+                <input type="text" id="application_title" maxlength="100" placeholder="Operation Task Monitoring">
+                <small class="text-muted">Displayed in the navigation bar and on the login page.</small>
+            </div>
+            <div class="form-group">
+                <label for="logo_file">Logo</label>
+                <input type="file" id="logo_file" accept="image/jpeg,.jpg,.jpeg">
+                <small class="text-muted">JPG only, up to 2 MB. It appears beside the title in the navigation bar and above the login title.</small>
+            </div>
+            <div>
+                <button type="button" class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="uploadLogo()">Upload Logo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SMTP Email Settings -->
+    <div class="tasks-section">
+        <h2>📧 SMTP Email</h2>
+        <form id="smtpForm" class="modal-body" style="display:flex;flex-direction:column;gap:var(--spacing-md);">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="smtp_server">SMTP Server</label>
+                    <input type="text" id="smtp_server" placeholder="smtp.gmail.com">
+                </div>
+                <div class="form-group">
+                    <label for="smtp_port">Port</label>
+                    <input type="number" id="smtp_port" placeholder="587" value="587">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="smtp_username">Username</label>
+                    <input type="text" id="smtp_username" placeholder="user@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="smtp_password">Password</label>
+                    <input type="password" id="smtp_password" placeholder="••••••••">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="email_from">From Email</label>
+                    <input type="email" id="email_from" placeholder="noreply@example.com">
+                </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="smtp_use_tls" checked>
+                    <label for="smtp_use_tls">Use TLS</label>
+                </div>
+            </div>
+            <div style="display:flex;gap:var(--spacing-sm);">
+                <button type="button" class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="sendTestEmail()">📤 Send Test Email</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Webhook Settings -->
+    <div class="tasks-section">
+        <h2>🔗 Webhook</h2>
+        <form id="webhookForm" class="modal-body" style="display:flex;flex-direction:column;gap:var(--spacing-md);">
+            <div class="form-group">
+                <label for="webhook_url">Webhook URL</label>
+                <input type="url" id="webhook_url" placeholder="https://api.line.me/v2/bot/message/push">
+            </div>
+            <div class="form-group">
+                <label for="webhook_token">Bearer Token (optional)</label>
+                <input type="password" id="webhook_token" placeholder="••••••••">
+            </div>
+            <button type="button" class="btn btn-primary" onclick="saveSettings()">💾 Save Settings</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', loadSettings);
+
+async function loadSettings() {
+    try {
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+        if (data.settings) {
+            Object.keys(data.settings).forEach(key => {
+                const el = document.getElementById(key);
+                if (!el) return;
+                if (el.type === 'checkbox') {
+                    el.checked = data.settings[key] === 'true';
+                } else {
+                    el.value = data.settings[key] || '';
+                }
+            });
+        }
+    } catch (e) {
+        showNotification('Failed to load settings', 'error');
+    }
+}
+
+async function saveSettings() {
+    const keys = [
+        'smtp_server', 'smtp_port', 'smtp_use_tls', 'smtp_username',
+        'smtp_password', 'email_from', 'webhook_url', 'webhook_token',
+        'application_title'
+    ];
+    const payload = {};
+    keys.forEach(k => {
+        const el = document.getElementById(k);
+        if (!el) return;
+        if (el.type === 'checkbox') {
+            payload[k] = el.checked;
+        } else {
+            payload[k] = el.value;
+        }
+    });
+
+    try {
+        const res = await fetch('/api/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+            const applicationTitle = document.getElementById('application_title').value.trim() || 'Operation Task Monitoring';
+            const navBrand = document.querySelector('.nav-brand-title');
+            if (navBrand && applicationTitle) {
+                navBrand.textContent = applicationTitle;
+            }
+            showNotification('Settings saved!', 'success');
+        } else {
+            showNotification(data.error || 'Save failed', 'error');
+        }
+    } catch (e) {
+        showNotification('Failed to save settings', 'error');
+    }
+}
+
+async function uploadLogo() {
+    const logoInput = document.getElementById('logo_file');
+    if (!logoInput.files.length) {
+        showNotification('Choose a JPG logo first', 'error');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('logo', logoInput.files[0]);
+
+    try {
+        const res = await fetch('/api/settings/logo', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('Logo uploaded!', 'success');
+            setTimeout(() => window.location.reload(), 500);
+        } else {
+            showNotification(data.error || 'Logo upload failed', 'error');
+        }
+    } catch (e) {
+        showNotification('Logo upload failed', 'error');
+    }
+}
+
+async function sendTestEmail() {
+    try {
+        const res = await fetch('/api/settings/test-email', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(data.message, 'success');
+        } else {
+            showNotification(data.error || 'Test failed', 'error');
+        }
+    } catch (e) {
+        showNotification('Failed to send test email', 'error');
+    }
+}
+
+function showNotification(message, type = 'info') {
+    const container = document.getElementById('notification-container');
+    const n = document.createElement('div');
+    n.className = `notification notification-${type}`;
+    n.textContent = message;
+    container.appendChild(n);
+    setTimeout(() => n.remove(), 5000);
+}
+</script>
+{% endblock %}

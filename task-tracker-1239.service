@@ -1,0 +1,19 @@
+[Unit]
+Description=Task Tracker Application
+After=network.target
+
+[Service]
+Type=simple
+User=seiko
+WorkingDirectory=/tmp/repos/task_monitoring
+Environment="PATH=/tmp/repos/task_monitoring/venv/bin"
+Environment="FLASK_ENV=production"
+Environment="APP_HOST=0.0.0.0"
+Environment="APP_PORT=1239"
+Environment="BOOTSTRAP_DEFAULT_DATA=true"
+ExecStart=/tmp/repos/task_monitoring/venv/bin/python app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

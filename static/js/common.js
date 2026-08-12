@@ -43,16 +43,36 @@
         }
     }
 
+    function setupMobileNavigation() {
+        const toggle = document.getElementById('navMenuToggle');
+        const menu = document.getElementById('navMenu');
+        if (!toggle || !menu) return;
+
+        toggle.addEventListener('click', () => {
+            const isOpen = menu.classList.toggle('is-open');
+            toggle.setAttribute('aria-expanded', String(isOpen));
+        });
+
+        menu.addEventListener('click', (event) => {
+            if (event.target.matches('.nav-link')) {
+                menu.classList.remove('is-open');
+                toggle.setAttribute('aria-expanded', 'false');
+            }
+        });
+    }
+
     // Initialize when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             applyDarkMode();
             setupDarkModeToggle();
+            setupMobileNavigation();
             console.log('Dark mode initialized:', isDarkMode());
         });
     } else {
         applyDarkMode();
         setupDarkModeToggle();
+        setupMobileNavigation();
         console.log('Dark mode initialized (DOM ready):', isDarkMode());
     }
 

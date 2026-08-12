@@ -1,50 +1,59 @@
 """
-Notification system for email and LINE Messaging API.
+Notification system for email and webhook.
 """
 
 import smtplib
 import requests
 import os
+import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional, Dict, Any
-import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _get_setting(key, default=''):
+    """Read a setting from the database, falling back to env vars."""
+    try:
+        from models import AppSetting
+        row = AppSetting.query.filter_by(key=key).first()
+        if row and row.value:
+            return row.value
+    except Exception:
+        pass
+    return os.environ.get(key.upper(), default)
+
+
+def _get_smtp_config():
+    """Build SMTP config dict from DB/env."""
+    return {
+        'server': _get_setting('smtp_server', 'localhost'),
+        'port': int(_get_setting('smtp_port', '587')),
+        'use_tls': _get_setting('smtp_use_tls', 'true').lower() == 'true',
+        'username': _get_setting('smtp_username', ''),
+        'password': _get_setting('smtp_password', ''),
+        'from': _get_setting('email_from', 'noreply@tasktracker.local'),
+    }
 
 
 def send_email_notification(to_email: str, subject: str, task_data: Dict[str, Any]) -> bool:
     """
     Send email notification for a task.
-
-    Args:
-        to_email: Recipient email address
-        subject: Email subject
-        task_data: Dictionary containing task information
-
-    Returns:
-        True if email sent successfully, False otherwise
     """
-    smtp_server = os.environ.get('SMTP_SERVER', 'localhost')
-    smtp_port = int(os.environ.get('SMTP_PORT', 587))
-    smtp_username = os.environ.get('SMTP_USERNAME', '')
-    smtp_password = os.environ.get('SMTP_PASSWORD', '')
-    email_from = os.environ.get('EMAIL_FROM', 'noreply@tasktracker.local')
+    cfg = _get_smtp_config()
 
-    # Skip if SMTP not configured
-    if not smtp_username or not smtp_password:
+    if not cfg['username'] or not cfg['password']:
         logger.warning("SMTP not configured, skipping email notification")
         return False
 
     try:
-        # Create email message
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
-        msg['From'] = email_from
+        msg['From'] = cfg['from']
         msg['To'] = to_email
 
-        # HTML email body
         html_body = f"""
         <html>
         <head></head>
@@ -80,10 +89,10 @@ def send_email_notification(to_email: str, subject: str, task_data: Dict[str, An
 
         msg.attach(MIMEText(html_body, 'html'))
 
-        # Send email
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_username, smtp_password)
+        with smtplib.SMTP(cfg['server'], cfg['port']) as server:
+            if cfg['use_tls']:
+                server.starttls()
+            server.login(cfg['username'], cfg['password'])
             server.send_message(msg)
 
         logger.info(f"Email sent to {to_email} for task {task_data.get('id')}")
@@ -96,25 +105,17 @@ def send_email_notification(to_email: str, subject: str, task_data: Dict[str, An
 
 def send_line_notification(line_id: str, task_data: Dict[str, Any], message_type: str = 'overdue') -> bool:
     """
-    Send LINE notification via LINE Messaging API.
-
-    Args:
-        line_id: LINE user ID to send message to
-        task_data: Dictionary containing task information
-        message_type: Type of message ('overdue', 'upcoming', 'daily_summary')
-
-    Returns:
-        True if message sent successfully, False otherwise
+    Send notification via webhook (LINE Messaging API or generic webhook).
     """
-    webhook_url = os.environ.get('LINE_WEBHOOK_URL')
-    channel_access_token = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
+    webhook_url = _get_setting('webhook_url') or _get_setting('LINE_WEBHOOK_URL')
+    token = _get_setting('webhook_token') or _get_setting('LINE_CHANNEL_ACCESS_TOKEN')
 
-    if not webhook_url or not channel_access_token:
-        logger.warning("LINE webhook not configured, skipping notification")
+    if not webhook_url:
+        logger.warning("Webhook not configured, skipping notification")
         return False
 
     if not line_id:
-        logger.warning("No LINE ID provided for user")
+        logger.warning("No recipient ID provided")
         return False
 
     try:
@@ -226,8 +227,9 @@ def send_line_notification(line_id: str, task_data: Dict[str, Any], message_type
 
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {channel_access_token}'
         }
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
 
         response = requests.post(webhook_url, json=message, headers=headers, timeout=10)
         response.raise_for_status()
