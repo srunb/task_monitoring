@@ -1,6 +1,8 @@
 # Operation Task Monitoring
 
 A lightweight Flask task-management application for tracking operational work through a Kanban dashboard.
+
+
 <img width="1531" height="859" alt="image" src="https://github.com/user-attachments/assets/c609e74f-75dd-44b1-9f52-7941465276ad" />
 
 
